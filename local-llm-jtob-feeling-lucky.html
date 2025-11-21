@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JTOB/JTOB-IC Template Customizer + Local LLM</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Marked.js for Preview -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Custom Scrollbar for dark theme feel */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+        
+        /* Markdown Preview Styles */
+        .markdown-preview h1 { font-size: 1.8em; font-weight: bold; margin-top: 1em; margin-bottom: 0.5em; padding-bottom: 0.3em; border-bottom: 1px solid #e2e8f0; }
+        .markdown-preview h2 { font-size: 1.5em; font-weight: bold; margin-top: 1.5em; margin-bottom: 0.5em; color: #1e293b; }
+        .markdown-preview h3 { font-size: 1.25em; font-weight: bold; margin-top: 1.25em; margin-bottom: 0.5em; color: #334155; }
+        .markdown-preview p { margin-bottom: 1em; line-height: 1.6; color: #374151; }
+        .markdown-preview ul { list-style-type: disc; margin-left: 1.5em; margin-bottom: 1em; }
+        .markdown-preview pre { background: #f8fafc; padding: 1em; border-radius: 0.5em; overflow-x: auto; border: 1px solid #e2e8f0; margin-bottom: 1em; }
+        .markdown-preview code { font-family: monospace; background: #f1f5f9; padding: 0.2em 0.4em; border-radius: 0.25em; font-size: 0.9em; }
+        .markdown-preview pre code { background: transparent; padding: 0; }
+        .markdown-preview blockquote { border-left: 4px solid #3b82f6; padding-left: 1em; margin-left: 0; color: #4b5563; font-style: italic; background-color: #eff6ff; padding: 0.5rem; }
+        .markdown-preview table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
+        .markdown-preview th, .markdown-preview td { border: 1px solid #cbd5e1; padding: 0.5em; text-align: left; }
+        .markdown-preview th { background-color: #f1f5f9; }
+        
+        /* Custom Instruction Highlight */
+        .custom-instruction-block {
+            border: 1px dashed #f59e0b;
+            background-color: #fffbeb;
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            font-size: 0.9em;
+        }
+        
+        /* AI Sparkle Animation */
+        @keyframes sparkle {
+            0% { opacity: 0.5; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.1); }
+            100% { opacity: 0.5; transform: scale(0.8); }
+        }
+        .animate-sparkle {
+            animation: sparkle 2s infinite ease-in-out;
+        }
+        
+        .progress-bar-stripe {
+            background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent);
+            background-size: 1rem 1rem;
+            animation: progress-bar-stripes 1s linear infinite;
+        }
+        
+        @keyframes progress-bar-stripes {
+            0% { background-position: 1rem 0; }
+            100% { background-position: 0 0; }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 h-screen overflow-hidden">
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- 1. LOCAL LLM SERVICE INTEGRATION ---
+        const GeminiService = {
+            generate: async (userKey, prompt, endpoint = "http://localhost:8033", signal) => {
+                const maxRetries = 3;
+                let attempt = 0;
+                
+                while (attempt < maxRetries) {
+                    try {
+                        if (signal?.aborted) throw new Error("Aborted");
+
+                        // Ensure endpoint has no trailing slash
+                        const cleanEndpoint = endpoint.replace(/\/$/, "");
+                        
+                        const response = await fetch(`${cleanEndpoint}/v1/chat/completions`, {
+                            method: 'POST',
+                            headers: { 
+                                'Content-Type': 'application/json',
+                                ...(userKey && { 'Authorization': `Bearer ${userKey}` })
+                            },
+                            body: JSON.stringify({
+                                model: "local-model", 
+                                messages: [{ role: "user", content: prompt }],
+                                temperature: 0.7,
+                                max_tokens: 800
+                            }),
+                            signal // Pass abort signal
+                        });
+
+                        if (!response.ok) {
+                            throw new Error(`API Error: ${response.statusText} (${response.status})`);
+                        }
+
+                        const data = await response.json();
+                        return data.choices?.[0]?.message?.content || "";
+                    } catch (error) {
+                        if (error.name === 'AbortError' || error.message === 'Aborted') throw error;
+                        console.warn(`Attempt ${attempt + 1} failed:`, error);
+                        attempt++;
+                        if (attempt === maxRetries) throw error;
+                        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+                    }
+                }
+            }
+        };
+
+        // --- 2. DATA DEFINITIONS ---
+        const MODE = { JTOB: 'JTOB', JTOB_IC: 'JTOB-IC' };
+
+        const DEPENDENCIES = {
+            "1.3": ["2.3", "4.3", "4.4", "5.3"],
+            "2.3": ["4.3", "5.3"],
+            "4.3": ["5.3"]
+        };
+
+        const SECTIONS = {
+            "CORE": {
+                title: "CORE PRINCIPLES",
+                required: true,
+                content: `Build minimal ontologies for specific purposes. Every concept, relationship, constraint, and assessment metric must justify its inclusion through actual use in required queries, artifacts, or decisions. Default to exclusion. Prefer implicit semantics. Operationalize nuanced judgments through evidence-based metrics. Validate empirically against concrete requirements.`
+            },
+            "WARNINGS": {
+                title: "CRITICAL WARNINGS",
+                required: true,
+                content: `- Search to verify current tool versions, standards, and best practices before assuming\n- Do not speculate about future needs or build "comprehensive" assessment frameworks\n- Do not replicate domain knowledge unless it affects project decisions`
+            },
+            "1.1": { phase: 1, title: "1.1 Use Case Definition", mode: "ALL", content: `**Primary Purpose:** [One sentence: what this ontology enables]\n\n**Deliverables:** [Specific artifacts]\n- [Deliverable 1]\n\n**Decision Points:** [Specific choices required]\n- [Decision 1]\n\n**Tool Ecosystem:**\n- Primary tool: [Name]\n\n**Scope:**\n- Domain: [Specific system]` },
+            "1.2": { phase: 1, title: "1.2 Query Set", mode: "ALL", content: `*Define 5-10 literal questions that must be answerable.*\n\n**Q1:** [Specific structural query]\n→ Supports: [Decision/artifact]\n→ Concepts needed: [Provisional list]\n→ Requires discrimination: [Yes/No]` },
+            "1.3": { phase: 1, title: "1.3 Discrimination Requirements", mode: "IC_ONLY", content: `*Extract from queries: which questions require nuanced judgment?*\n\n**Discrimination Need 1:**\n- Query: [Which query]\n- Decision impact: [What changes]\n- Justification: [Why binary insufficient]` },
+            "1.4": { phase: 1, title: "1.4 Integration Points", mode: "ALL", content: `*Search and verify current versions of all external references.*\n\n**Reference Ontologies:**\n- [Name]: [Version]\n**Tool Metamodels:**\n- [Tool]: [Schema version]` },
+            "2.1": { phase: 2, title: "2.1 Core Concepts", mode: "ALL", content: `*Extract via backward chaining: deliverables → queries → integration → logical dependencies ONLY.*\n\n**[Concept Name]**\n- Definition: [Precision level]\n- Justification: [Requirement trace]` },
+            "2.2": { phase: 2, title: "2.2 Relationships", mode: "ALL", content: `*Include ONLY relationships that enable required traceability or analyses.*\n\n**[Relationship Type]**\n- Definition: [Meaning]\n- Domain → Range: [Source] → [Target]` },
+            "2.3": { phase: 2, title: "2.3 Assessment Metrics", mode: "IC_ONLY", content: `*Only if discrimination requirements cannot be met with properties.*\n\n**[Metric Name]**\n**Purpose:** [Decision enabled]\n**Scale:** [Ordinal/Interval]\n**Levels:**\n- **Level [X]:** [Label] - [Definition]` },
+            "3.1": { phase: 3, title: "3.1 Validation Rules", mode: "ALL", content: `*Only rules that enforce consistency or prevent invalidating errors.*\n\n**[Rule Name]**\n- Constraint: [Statement]\n- Triggered by: [Need]` },
+            "3.2": { phase: 3, title: "3.2 Inference Rules", mode: "ALL", content: `*Only if queries require derived information.*\n\n**[Rule Name]**\n- Purpose: [Query/Analysis]\n- Logic: If [X] then [Z]` },
+            "3.3": { phase: 3, title: "3.3 Metric Combination Rules", mode: "IC_ONLY", content: `*Only if multiple metrics must be combined.*\n\n**[Combination Rule Name]**\n- Inputs: [M1, M2]\n- Logic: [Formula/Tree]` },
+            "4.1": { phase: 4, title: "4.1 Query Execution", mode: "ALL", content: `*For each query from 1.2:*\n\n**Query:** [Text]\n- Answerable: [Yes/No]\n- Example answer: [Concrete]` },
+            "4.2": { phase: 4, title: "4.2 Artifact Generation", mode: "ALL", content: `*For each deliverable from 1.1:*\n\n**Deliverable:** [Name]\n**Coverage:**\n- Information present: [Yes/No]` },
+            "4.3": { phase: 4, title: "4.3 Metric Calibration", mode: "IC_ONLY", content: `*For each metric from 2.3:*\n\n**Metric:** [Name]\n**Calibration Set:** [10-15 known cases]` },
+            "4.4": { phase: 4, title: "4.4 Decision Impact Verification", mode: "IC_ONLY", content: `*For each discrimination from 1.3:*\n\n**Discrimination:** [Name]\n**Test Cases:**\n- Case A vs Case B → Outcome differs?` },
+            "5.1": { phase: 5, title: "5.1 Summary", mode: "ALL", content: `**Purpose:** [One sentence]\n**Capabilities:** [Cap 1, Cap 2]\n**Metrics:** [Counts]` },
+            "5.2": { phase: 5, title: "5.2 Assumptions & Limitations", mode: "ALL", content: `**Key Assumptions:** [Assumption]\n**Known Limitations:** [What this cannot do]` },
+            "5.3": { phase: 5, title: "5.3 Assessment Protocol", mode: "IC_ONLY", content: `**[Metric Name]**\n- Version: [X.Y]\n- Evidence requirements: [Types]` },
+            "5.4": { phase: 5, title: "5.4 Evolution", mode: "ALL", content: `**Extension Triggers:** [Trigger]\n**Stability Guarantees:** [Immutable core]` }
+        };
+
+        const INITIAL_STATE = {
+            mode: MODE.JTOB,
+            verbosity: 'standard',
+            configName: 'My_Ontology_Template',
+            domainContext: '', 
+            userApiKey: '', 
+            llmEndpoint: 'http://localhost:8033', 
+            sections: Object.keys(SECTIONS).reduce((acc, key) => {
+                acc[key] = { enabled: SECTIONS[key].mode === "ALL" };
+                return acc;
+            }, {}),
+            customInstructions: {},
+            globalSettings: { includeCore: true, includeWarnings: true, includeChecklist: true }
+        };
+
+        // --- 3. COMPONENTS ---
+
+        const Icon = ({ name, size = 16, className = "" }) => {
+            React.useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} className={className} style={{ width: size, height: size, display: 'inline-block' }}></i>;
+        };
+
+        // Helper for Prompt Construction
+        const constructPrompt = (domainContext, sectionId, sectionTitle, sectionContent, existingInstructionsMap) => {
+            // Build the transcript of everything decided SO FAR
+            const existingDecisions = Object.entries(existingInstructionsMap)
+                .filter(([k, v]) => k !== sectionId && v) // Don't include current section
+                .map(([k, v]) => `[SECTION ${SECTIONS[k].title}]: ${v}`)
+                .join('\n\n');
+
+            const contextBlock = `
+            DOMAIN CONTEXT: "${domainContext}"
+            
+            EXISTING DECISIONS & CONSTRAINTS (The ontology state so far):
+            ${existingDecisions || "No other sections customized yet."}
+            `;
+
+            // 1.1 is special (Generation vs Suggestion)
+            if (sectionId === "1.1") {
+                return `You are an expert ontology engineer using the JTOB framework.
+                ${contextBlock}
+                TASK: The user wants to customize the instructions for SECTION: "${sectionTitle}".
+                Current Template: ${sectionContent}
+                ACTION: Draft specific custom instructions for the LLM that will use this template.
+                Tell the LLM exactly what kind of "Primary Purpose", "Deliverables", and "Decisions" are relevant for the domain defined above.
+                Give concrete examples they should look for. Keep it concise (max 100 words).
+                Return ONLY the instruction text.`;
+            } else {
+                return `You are an expert ontology engineer using the JTOB framework.
+                ${contextBlock}
+                TASK: The user is configuring SECTION: "${sectionTitle}".
+                ACTION: Suggest 1-2 concise, high-impact custom instructions that would help an LLM generate better content for this specific domain.
+                Ensure your suggestion is LOGICALLY CONSISTENT with the "Existing Decisions" listed above.
+                Focus on what is unique about "${domainContext}" regarding this section.
+                Return ONLY the instruction text.`;
+            }
+        };
+
+        const LlmConfig = ({ apiKey, endpoint, onApiKeyChange, onEndpointChange }) => {
+            const [isVisible, setIsVisible] = useState(false);
+            return (
+                <div className="bg-slate-800 p-3 rounded-lg mb-4 text-slate-200 shadow-inner">
+                    <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-bold uppercase tracking-widest text-blue-400 flex items-center gap-1">
+                            <Icon name="cpu" size={12} /> Local LLM
+                        </span>
+                    </div>
+                    <input type="text" className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500 mb-2" placeholder="http://localhost:8033" value={endpoint} onChange={(e) => onEndpointChange(e.target.value)} />
+                    <button onClick={() => setIsVisible(!isVisible)} className="text-xs text-slate-400 hover:text-white mb-1 flex items-center gap-1">
+                        API Key (optional) <Icon name={isVisible ? "eye-off" : "eye"} size={10} />
+                    </button>
+                    {isVisible && (
+                        <input type="password" className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500" placeholder="Leave empty if not required" value={apiKey} onChange={(e) => onApiKeyChange(e.target.value)} />
+                    )}
+                </div>
+            );
+        };
+
+        const SectionToggle = ({ id, def, state, onToggle, onCustomize, customText, isIC }) => {
+            return (
+                <div className={`border-l-2 pl-3 py-2 mb-2 transition-colors ${state.sections[id].enabled ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200 opacity-70'}`}>
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                            <input type="checkbox" checked={state.sections[id].enabled} onChange={() => onToggle(id)} disabled={state.mode === MODE.JTOB && def.mode === "IC_ONLY"} className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500" />
+                            <span className={`text-sm font-medium ${isIC ? 'text-purple-700' : 'text-gray-700'}`}>
+                                {def.title}
+                                {isIC && <span className="ml-2 text-[10px] bg-purple-100 text-purple-800 px-1 rounded border border-purple-200">IC</span>}
+                            </span>
+                        </div>
+                        <button onClick={() => onCustomize(id)} className="text-gray-400 hover:text-blue-500 relative group">
+                            <Icon name="edit-2" size={14} />
+                        </button>
+                    </div>
+                    {state.sections[id].enabled && customText && (
+                        <div className="mt-2 text-xs bg-yellow-50 border border-yellow-200 p-2 rounded text-yellow-800 flex items-start gap-2">
+                            <Icon name="sticky-note" size={12} className="mt-0.5" />
+                            <span className="italic line-clamp-2">{customText}</span>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [state, setState] = useState(() => {
+                const saved = localStorage.getItem('jtob_config');
+                return saved ? JSON.parse(saved) : INITIAL_STATE;
+            });
+
+            const [customizingId, setCustomizingId] = useState(null);
+            const [previewMd, setPreviewMd] = useState('');
+            const [showCopyToast, setShowCopyToast] = useState(false);
+            
+            // AI States
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [aiError, setAiError] = useState(null);
+
+            // "Feeling Lucky" States
+            const [luckyStatus, setLuckyStatus] = useState({ active: false, currentIdx: 0, total: 0, currentSection: '' });
+            const abortControllerRef = useRef(null);
+
+            useEffect(() => { localStorage.setItem('jtob_config', JSON.stringify(state)); }, [state]);
+            useEffect(() => { generateTemplate(); }, [state]);
+
+            const generateTemplate = () => {
+                const date = new Date().toISOString().split('T')[0];
+                let md = `# ${state.mode === MODE.JTOB_IC ? 'JTOB-IC' : 'JTOB'} TEMPLATE\nVERSION: 3.0\nDATE: ${date}\nDOMAIN: ${state.domainContext || 'Generic'}\n\n`;
+                
+                if (state.globalSettings.includeCore) md += `## CORE PRINCIPLES\n\n${SECTIONS.CORE.content}\n\n`;
+                if (state.globalSettings.includeWarnings) md += `**Critical warnings:**\n${SECTIONS.WARNINGS.content}\n\n`;
+                md += `---\n\n`;
+
+                const phases = [1, 2, 3, 4, 5];
+                phases.forEach(phaseNum => {
+                    const phaseSections = Object.keys(SECTIONS).filter(k => SECTIONS[k].phase === phaseNum && state.sections[k]?.enabled);
+                    if (phaseSections.length > 0) {
+                        md += `## PHASE ${phaseNum}\n\n`;
+                        phaseSections.forEach(key => {
+                            md += `### ${SECTIONS[key].title}\n\n`;
+                            if (state.customInstructions[key]) md += `> 💡 **Custom Instruction:** ${state.customInstructions[key]}\n\n`;
+                            md += `${SECTIONS[key].content}\n\n`;
+                        });
+                        md += `---\n\n`;
+                    }
+                });
+                md += `\n<!-- JTOB_CONFIG_START\n${JSON.stringify(state)}\nJTOB_CONFIG_END -->`;
+                setPreviewMd(md);
+            };
+
+            // --- AI HANDLERS ---
+
+            const handleSingleSuggestion = async (sectionId) => {
+                if (!state.domainContext) return alert("Please enter a Domain / Context first.");
+                setIsGenerating(true);
+                setAiError(null);
+                try {
+                    const prompt = constructPrompt(state.domainContext, sectionId, SECTIONS[sectionId].title, SECTIONS[sectionId].content, state.customInstructions);
+                    const result = await GeminiService.generate(state.userApiKey, prompt, state.llmEndpoint);
+                    if (result) setState(s => ({ ...s, customInstructions: { ...s.customInstructions, [sectionId]: result.trim() } }));
+                } catch (err) { setAiError("Generation failed."); } finally { setIsGenerating(false); }
+            };
+
+            // --- LUCKY MODE HANDLER (SEQUENTIAL CHAIN) ---
+            const handleLuckyDip = async () => {
+                if (!state.domainContext) return alert("Please enter a Domain / Context first.");
+                if (!confirm("This will populate ALL enabled sections using AI, potentially overwriting existing custom instructions. This may take a few minutes. Continue?")) return;
+
+                // 1. Setup
+                const enabledSections = Object.keys(SECTIONS).filter(k => state.sections[k].enabled);
+                
+                // Sort properly by phase then key to ensure logical flow
+                enabledSections.sort((a, b) => {
+                    if (SECTIONS[a].phase !== SECTIONS[b].phase) return SECTIONS[a].phase - SECTIONS[b].phase;
+                    return a.localeCompare(b);
+                });
+
+                abortControllerRef.current = new AbortController();
+                setLuckyStatus({ active: true, currentIdx: 0, total: enabledSections.length, currentSection: '' });
+                let currentInstructions = { ...state.customInstructions }; // Local accumulator
+
+                try {
+                    for (let i = 0; i < enabledSections.length; i++) {
+                        const sectionId = enabledSections[i];
+                        const sectionDef = SECTIONS[sectionId];
+                        
+                        // Update UI
+                        setLuckyStatus({ 
+                            active: true, 
+                            currentIdx: i + 1, 
+                            total: enabledSections.length, 
+                            currentSection: sectionDef.title 
+                        });
+
+                        // Construct prompt using accumulated instructions
+                        const prompt = constructPrompt(
+                            state.domainContext, 
+                            sectionId, 
+                            sectionDef.title, 
+                            sectionDef.content, 
+                            currentInstructions // <-- Vital: Pass the accumulator
+                        );
+
+                        // Generate
+                        const result = await GeminiService.generate(
+                            state.userApiKey, 
+                            prompt, 
+                            state.llmEndpoint,
+                            abortControllerRef.current.signal
+                        );
+
+                        // Update Accumulator & State
+                        if (result) {
+                            const trimmed = result.trim();
+                            currentInstructions[sectionId] = trimmed;
+                            
+                            // Update React state immediately so UI updates progressively
+                            setState(s => ({
+                                ...s,
+                                customInstructions: {
+                                    ...s.customInstructions,
+                                    [sectionId]: trimmed
+                                }
+                            }));
+                        }
+                    }
+                } catch (error) {
+                    if (error.message !== 'Aborted') {
+                        console.error(error);
+                        alert("Generation interrupted: " + error.message);
+                    }
+                } finally {
+                    setLuckyStatus({ active: false, currentIdx: 0, total: 0, currentSection: '' });
+                    abortControllerRef.current = null;
+                }
+            };
+
+            const cancelLuckyDip = () => {
+                if (abortControllerRef.current) abortControllerRef.current.abort();
+            };
+
+            // Standard Toggles & Imports
+            const toggleSection = (id) => {
+                setState(prev => {
+                    const newState = { ...prev };
+                    newState.sections[id].enabled = !newState.sections[id].enabled;
+                    // (Simplified dependency logic for brevity)
+                    return newState;
+                });
+            };
+            
+            const handleModeChange = (m) => setState(s => ({ ...s, mode: m }));
+            const copyToClipboard = () => { navigator.clipboard.writeText(previewMd).then(() => { setShowCopyToast(true); setTimeout(() => setShowCopyToast(false), 2000); }); };
+
+            return (
+                <div className="flex h-full flex-col md:flex-row">
+                    
+                    {/* LEFT SIDEBAR */}
+                    <div className="w-full md:w-1/2 lg:w-5/12 flex flex-col border-r border-slate-200 bg-white h-full overflow-hidden">
+                        <div className="p-4 border-b border-slate-200 bg-slate-50">
+                            <div className="flex justify-between items-center mb-4">
+                                <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                    <Icon name="layout-template" className="text-blue-600" /> JTOB Builder
+                                </h1>
+                                <div className="flex gap-2">
+                                    <button onClick={() => {
+                                        const blob = new Blob([JSON.stringify(state)], {type: 'application/json'});
+                                        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'jtob_config.json'; a.click();
+                                    }} className="text-slate-600 px-2 py-1 rounded border bg-white text-xs hover:bg-slate-50">Save</button>
+                                </div>
+                            </div>
+
+                            <div className="flex bg-slate-200 p-1 rounded-lg mb-4">
+                                <button className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${state.mode === MODE.JTOB ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`} onClick={() => handleModeChange(MODE.JTOB)}>Standard</button>
+                                <button className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${state.mode === MODE.JTOB_IC ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-500'}`} onClick={() => handleModeChange(MODE.JTOB_IC)}>JTOB-IC</button>
+                            </div>
+
+                            <LlmConfig apiKey={state.userApiKey} endpoint={state.llmEndpoint} onApiKeyChange={(v) => setState(s => ({...s, userApiKey: v}))} onEndpointChange={(v) => setState(s => ({...s, llmEndpoint: v}))} />
+                            
+                            <div className="mt-2">
+                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Domain / Context <span className="text-blue-400 font-normal">*</span></label>
+                                <div className="flex gap-2">
+                                    <input type="text" className="flex-1 text-sm border border-slate-300 rounded p-1.5 bg-white outline-none" placeholder="e.g. Supply Chain..." value={state.domainContext} onChange={(e) => setState(s => ({...s, domainContext: e.target.value}))} />
+                                    
+                                    {/* LUCKY DIP BUTTON */}
+                                    {luckyStatus.active ? (
+                                        <button onClick={cancelLuckyDip} className="bg-red-100 text-red-600 border border-red-200 px-3 rounded hover:bg-red-200 transition-colors flex items-center justify-center" title="Stop Generation">
+                                            <Icon name="square" size={14} fill="currentColor" />
+                                        </button>
+                                    ) : (
+                                        <button 
+                                            onClick={handleLuckyDip} 
+                                            disabled={!state.domainContext}
+                                            className={`px-3 rounded border transition-all flex items-center gap-1 font-medium text-xs whitespace-nowrap
+                                                ${state.domainContext 
+                                                    ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white border-transparent hover:shadow-md hover:scale-[1.02]' 
+                                                    : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'}`}
+                                            title="Auto-populate all sections using AI (Sequential Context)"
+                                        >
+                                            <Icon name="sparkles" size={12} /> Auto-Fill
+                                        </button>
+                                    )}
+                                </div>
+                                
+                                {/* LUCKY PROGRESS BAR */}
+                                {luckyStatus.active && (
+                                    <div className="mt-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                                        <div className="flex justify-between text-[10px] text-slate-500 mb-1 font-mono">
+                                            <span>Generating: {luckyStatus.currentSection}...</span>
+                                            <span>{luckyStatus.currentIdx}/{luckyStatus.total}</span>
+                                        </div>
+                                        <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                            <div 
+                                                className="h-full bg-blue-500 progress-bar-stripe transition-all duration-500 ease-out"
+                                                style={{ width: `${(luckyStatus.currentIdx / luckyStatus.total) * 100}%` }}
+                                            ></div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4">
+                            {/* Sections List */}
+                            {[1, 2, 3, 4, 5].map(phase => (
+                                <div key={phase} className="mb-4">
+                                    <h3 className="text-xs font-bold text-blue-600 uppercase mb-2 tracking-wider bg-blue-50 p-1 rounded">Phase {phase}</h3>
+                                    <div className="pl-2">
+                                        {Object.keys(SECTIONS).filter(k => SECTIONS[k].phase === phase).map(key => (
+                                            <SectionToggle 
+                                                key={key} id={key} def={SECTIONS[key]} state={state} 
+                                                onToggle={toggleSection} onCustomize={setCustomizingId} 
+                                                customText={state.customInstructions[key]} 
+                                                isIC={SECTIONS[key].mode === "IC_ONLY"} 
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* RIGHT PANEL: PREVIEW */}
+                    <div className="w-full md:w-1/2 lg:w-7/12 flex flex-col h-full bg-white">
+                        <div className="p-3 border-b border-slate-200 flex justify-end items-center bg-slate-50 gap-2">
+                            <button onClick={copyToClipboard} className="text-slate-600 hover:text-blue-600 px-3 py-1 text-sm rounded border border-slate-300 bg-white flex items-center gap-2">
+                                <Icon name="copy" size={14} /> Copy
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-8 bg-white relative">
+                             <div className="markdown-preview max-w-3xl mx-auto" dangerouslySetInnerHTML={{ __html: marked.parse(previewMd) }} />
+                        </div>
+                    </div>
+
+                    {/* MODAL */}
+                    {customizingId && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden">
+                                <div className="p-4 border-b flex justify-between items-center bg-slate-50">
+                                    <h3 className="font-bold">Customize {SECTIONS[customizingId].title}</h3>
+                                    <button onClick={() => setCustomizingId(null)}><Icon name="x" size={20} /></button>
+                                </div>
+                                <div className="p-4">
+                                    <textarea 
+                                        className="w-full h-32 border rounded p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                                        placeholder="Enter custom instructions..."
+                                        value={state.customInstructions[customizingId] || ''}
+                                        onChange={(e) => setState(s => ({ ...s, customInstructions: { ...s.customInstructions, [customizingId]: e.target.value } }))}
+                                    ></textarea>
+                                    <div className="relative mt-2 h-8">
+                                         <button 
+                                            onClick={() => handleSingleSuggestion(customizingId)}
+                                            disabled={isGenerating || !state.domainContext}
+                                            className={`absolute right-0 top-0 text-xs flex items-center gap-1 px-2 py-1.5 rounded border shadow-sm transition-all
+                                                ${isGenerating ? 'bg-slate-100 text-slate-400' : 'bg-yellow-50 text-yellow-700 border-yellow-200 hover:border-yellow-300'}`}
+                                        >
+                                            {isGenerating ? 'Thinking...' : '✨ Suggest with AI'}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="p-4 bg-slate-50 border-t flex justify-end gap-2">
+                                    <button onClick={() => setCustomizingId(null)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded">Done</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showCopyToast && <div className="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-2 rounded shadow-lg text-sm flex items-center gap-2 animate-bounce"><Icon name="check" size={16} /> Copied</div>}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
