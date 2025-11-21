@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JTOB/JTOB-IC Template Customizer + Gemini</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Marked.js for Preview -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* Custom Scrollbar for dark theme feel */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+        
+        /* Markdown Preview Styles */
+        .markdown-preview h1 { font-size: 1.8em; font-weight: bold; margin-top: 1em; margin-bottom: 0.5em; padding-bottom: 0.3em; border-bottom: 1px solid #e2e8f0; }
+        .markdown-preview h2 { font-size: 1.5em; font-weight: bold; margin-top: 1.5em; margin-bottom: 0.5em; color: #1e293b; }
+        .markdown-preview h3 { font-size: 1.25em; font-weight: bold; margin-top: 1.25em; margin-bottom: 0.5em; color: #334155; }
+        .markdown-preview p { margin-bottom: 1em; line-height: 1.6; color: #374151; }
+        .markdown-preview ul { list-style-type: disc; margin-left: 1.5em; margin-bottom: 1em; }
+        .markdown-preview pre { background: #f8fafc; padding: 1em; border-radius: 0.5em; overflow-x: auto; border: 1px solid #e2e8f0; margin-bottom: 1em; }
+        .markdown-preview code { font-family: monospace; background: #f1f5f9; padding: 0.2em 0.4em; border-radius: 0.25em; font-size: 0.9em; }
+        .markdown-preview pre code { background: transparent; padding: 0; }
+        .markdown-preview blockquote { border-left: 4px solid #3b82f6; padding-left: 1em; margin-left: 0; color: #4b5563; font-style: italic; background-color: #eff6ff; padding: 0.5rem; }
+        .markdown-preview table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
+        .markdown-preview th, .markdown-preview td { border: 1px solid #cbd5e1; padding: 0.5em; text-align: left; }
+        .markdown-preview th { background-color: #f1f5f9; }
+        
+        /* Custom Instruction Highlight */
+        .custom-instruction-block {
+            border: 1px dashed #f59e0b;
+            background-color: #fffbeb;
+            padding: 0.5rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            font-size: 0.9em;
+        }
+        
+        /* AI Sparkle Animation */
+        @keyframes sparkle {
+            0% { opacity: 0.5; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.1); }
+            100% { opacity: 0.5; transform: scale(0.8); }
+        }
+        .animate-sparkle {
+            animation: sparkle 2s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 h-screen overflow-hidden">
+    <div id="root" class="h-full"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- 1. GEMINI API INTEGRATION ---
+        const apiKey = ""; // Execution environment key injection
+
+        const GeminiService = {
+            generate: async (userKey, prompt) => {
+                const keyToUse = userKey || apiKey;
+                if (!keyToUse) throw new Error("API Key missing");
+
+                // Exponential backoff retry logic
+                const maxRetries = 3;
+                let attempt = 0;
+                
+                while (attempt < maxRetries) {
+                    try {
+                        const response = await fetch(
+                            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${keyToUse}`,
+                            {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    contents: [{ parts: [{ text: prompt }] }]
+                                })
+                            }
+                        );
+
+                        if (!response.ok) {
+                            if (response.status === 429) {
+                                throw new Error("Rate limit exceeded");
+                            }
+                            throw new Error(`API Error: ${response.statusText}`);
+                        }
+
+                        const data = await response.json();
+                        return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                    } catch (error) {
+                        attempt++;
+                        if (attempt === maxRetries) throw error;
+                        await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+                    }
+                }
+            }
+        };
+
+        // --- 2. DATA DEFINITIONS ---
+
+        const MODE = {
+            JTOB: 'JTOB',
+            JTOB_IC: 'JTOB-IC'
+        };
+
+        // The dependency graph: Disabling key disables values
+        const DEPENDENCIES = {
+            "1.3": ["2.3", "4.3", "4.4", "5.3"],
+            "2.3": ["4.3", "5.3"],
+            "4.3": ["5.3"]
+        };
+
+        const SECTIONS = {
+            "CORE": {
+                title: "CORE PRINCIPLES",
+                required: true,
+                content: `Build minimal ontologies for specific purposes. Every concept, relationship, constraint, and assessment metric must justify its inclusion through actual use in required queries, artifacts, or decisions. Default to exclusion. Prefer implicit semantics. Operationalize nuanced judgments through evidence-based metrics. Validate empirically against concrete requirements.`
+            },
+            "WARNINGS": {
+                title: "CRITICAL WARNINGS",
+                required: true,
+                content: `- Search to verify current tool versions, standards, and best practices before assuming
+- Do not speculate about future needs or build "comprehensive" assessment frameworks
+- Do not replicate domain knowledge unless it affects project decisions
+- Stop decomposition when further detail doesn't affect any outcome
+- Collapse metric distinctions that don't change decisions`
+            },
+            "1.1": {
+                phase: 1, title: "1.1 Use Case Definition", mode: "ALL",
+                content: `**Primary Purpose:** [One sentence: what this ontology enables]
+
+**Deliverables:** [Specific artifacts with examples]
+- [Deliverable 1: type and concrete example]
+
+**Decision Points:** [Specific choices/judgments required]
+- [Decision 1: what gets chosen/prioritized/allocated]
+
+**Tool Ecosystem:**
+- Primary tool: [Name, version - verify current]
+- Integration points: [Other tools, formats, standards]
+
+**Scope:**
+- Timeline/lifecycle: [Project phase or duration]
+- Domain: [Specific system/product type]
+- Explicit exclusions: [What's out of scope]`
+            },
+            "1.2": {
+                phase: 1, title: "1.2 Query Set", mode: "ALL",
+                content: `*Define 5-10 literal questions that must be answerable. Tie each to a decision or artifact.*
+
+**Q1:** [Specific structural query]  
+→ Supports: [Decision/artifact]  
+→ Concepts needed: [Provisional list]
+→ Requires discrimination: [Yes/No]`
+            },
+            "1.3": {
+                phase: 1, title: "1.3 Discrimination Requirements", mode: "IC_ONLY",
+                content: `*Extract from queries: which questions require nuanced judgment rather than binary classification?*
+
+**Discrimination Need 1:**
+- Query: [Which query requires this]
+- Decision impact: [What changes based on distinction]
+- Current poles: [Low end] ←→ [High end]
+- Justification: [Why binary insufficient]
+
+**Test:** For each discrimination, list 3 real cases. Can stakeholders consistently order them? Do different orderings lead to different decisions? If no to either: eliminate or simplify.`
+            },
+            "1.4": {
+                phase: 1, title: "1.4 Integration Points", mode: "ALL",
+                content: `*Search and verify current versions of all external references.*
+
+**Reference Ontologies/Standards:**
+- [Name]: [Version - verified {date}]
+  - Mapping scope: [What must align]
+
+**Tool Metamodels:**
+- [Tool]: [Schema version - verified {date}]
+  - Required mappings: [Specific elements]`
+            },
+            "2.1": {
+                phase: 2, title: "2.1 Core Concepts", mode: "ALL",
+                content: `*Extract via backward chaining: deliverables → queries → integration → logical dependencies ONLY.*
+
+**[Concept Name]**
+- Definition: [At required precision level]
+- Justification: [Which deliverable/query/integration requires this]
+- Properties: [Only those used in queries/analyses]
+- Examples: [Instance 1], [Instance 2]`
+            },
+            "2.2": {
+                phase: 2, title: "2.2 Relationships", mode: "ALL",
+                content: `*Include ONLY relationships that enable required traceability, analyses, views, or integrations.*
+
+**[Relationship Type]**
+- Definition: [Precise meaning]
+- Directionality: [Uni/bidirectional]
+- Domain → Range: [Valid source types] → [Valid target types]
+- Justification: [Which query/artifact requires this]`
+            },
+            "2.3": {
+                phase: 2, title: "2.3 Assessment Metrics", mode: "IC_ONLY",
+                content: `*Only if discrimination requirements (1.3) cannot be met with concept properties alone.*
+
+**[Metric Name]**
+**Purpose:** [One sentence: what decision this enables]
+**Scale Type:** [Ordinal/Interval/Ratio]
+
+**Levels:**
+- **Level [X]:** [Label] - [Operational definition]
+  - Evidence: [What confirms this level]
+  - Decision threshold: [What action occurs at this level]
+
+**Boundary Rules:** [Explicit guidance for ambiguous cases]
+**Assessment Protocol:** [Step-by-step measurement]`
+            },
+            "3.1": {
+                phase: 3, title: "3.1 Validation Rules", mode: "ALL",
+                content: `*Only rules that enforce consistency, validate constraints affecting decisions, or prevent invalidating errors.*
+
+**[Rule Name]**
+- Constraint: [Natural language statement]
+- Triggered by: [Which query/artifact needs this]
+- Violation impact: [What breaks]`
+            },
+            "3.2": {
+                phase: 3, title: "3.2 Inference Rules", mode: "ALL",
+                content: `*Only if: queries require derived information, analyses need calculated properties, or view generation needs transitive closure.*
+
+**[Rule Name]**
+- Purpose: [What query/analysis uses this]
+- Logic: If [X] and [Y], then [Z]`
+            },
+            "3.3": {
+                phase: 3, title: "3.3 Metric Combination Rules", mode: "IC_ONLY",
+                content: `*Only if multiple metrics must be combined for decisions.*
+
+**[Combination Rule Name]**
+- Purpose: [Which decision requires combined assessment]
+- Inputs: [Metric 1], [Metric 2]
+- Logic: [How to combine - formula or decision tree]`
+            },
+            "4.1": {
+                phase: 4, title: "4.1 Query Execution", mode: "ALL",
+                content: `*For each query from 1.2:*
+
+**Query:** [Original query text]
+- Answerable: [Yes/Partial/No]
+- Concepts used: [Actual concepts]
+- Example answer: [Concrete answer using example instances]`
+            },
+            "4.2": {
+                phase: 4, title: "4.2 Artifact Generation", mode: "ALL",
+                content: `*For each deliverable from 1.1:*
+
+**Deliverable:** [Name]
+**Coverage:**
+- Information present: [Yes/Partial/No]
+- Gaps: [Missing elements or NONE]`
+            },
+            "4.3": {
+                phase: 4, title: "4.3 Metric Calibration", mode: "IC_ONLY",
+                content: `*For each metric from 2.3:*
+
+**Metric:** [Name]
+**Calibration Set:** [10-15 known cases spanning metric range]
+| Case | Description | Expected | Result | Match? |
+|------|-------------|----------|--------|--------|
+| [C1] | ... | L[X] | L[Y] | ✓/✗ |
+
+**Inter-rater Test:** [Agreement %]
+**Protocol Refinements:** [Adjustments made based on calibration]`
+            },
+            "4.4": {
+                phase: 4, title: "4.4 Decision Impact Verification", mode: "IC_ONLY",
+                content: `*For each discrimination requirement from 1.3:*
+
+**Discrimination:** [Name]
+**Decision:** [What gets chosen/prioritized]
+
+**Test Cases:**
+- Case A (Level [X]): → Outcome [Y]
+- Case B (Level [X+1]): → Outcome [Z]
+- Outcome differs: [Yes/No]`
+            },
+            "5.1": {
+                phase: 5, title: "5.1 Summary", mode: "ALL",
+                content: `**Purpose:** [One sentence from 1.1]
+**Capabilities:** This ontology supports [Capability 1], [Capability 2]
+**Metrics:**
+- Concepts: [N]
+- Relationships: [N]
+- Rules: [N]`
+            },
+            "5.2": {
+                phase: 5, title: "5.2 Assumptions & Limitations", mode: "ALL",
+                content: `**Key Assumptions:** [Assumption] | Verify via: [Method]
+**Known Limitations:** [What this cannot do] | Extension path: [How to add]
+**Dependencies:** Tools: [Name/version]`
+            },
+            "5.3": {
+                phase: 5, title: "5.3 Assessment Protocol", mode: "IC_ONLY",
+                content: `**[Metric Name]**
+- Current version: [X.Y] as of [Date]
+- Calibration status: [N cases, X% agreement]
+- Evidence requirements: [Types needed]`
+            },
+            "5.4": {
+                phase: 5, title: "5.4 Evolution", mode: "ALL",
+                content: `**Extension Triggers:** [New deliverable] → [Process]
+**Stability Guarantees:** [What won't change]
+**Validation Cadence:** [Frequency]`
+            }
+        };
+
+        const ANTI_PATTERNS = `## METRIC DESIGN ANTI-PATTERNS
+
+❌ **Theoretical completeness**: Building 7-point scales when only 3 levels affect decisions
+✓ **Justification test**: Every level boundary must correspond to a different action
+
+❌ **Expert judgment black box**: "Senior analyst determines feasibility"
+✓ **Evidence-based**: Protocol specifies what evidence confirms each level
+
+❌ **Premature quantification**: Forcing interval scales when ordinal captures all distinctions
+✓ **Appropriate measurement**: Use simplest scale type that supports required decisions
+
+❌ **Uncalibrated metrics**: "Seems right" without testing on known cases
+✓ **Empirical validation**: 80%+ agreement on 10+ calibration cases before deployment`;
+
+        const INITIAL_STATE = {
+            mode: MODE.JTOB,
+            verbosity: 'standard',
+            configName: 'My_Ontology_Template',
+            domainContext: '', // New field for AI context
+            userApiKey: '', // User provided key
+            sections: Object.keys(SECTIONS).reduce((acc, key) => {
+                acc[key] = { enabled: SECTIONS[key].mode === "ALL" };
+                return acc;
+            }, {}),
+            customInstructions: {},
+            globalSettings: {
+                includeCore: true,
+                includeWarnings: true,
+                includeChecklist: true
+            }
+        };
+
+        const PRESETS = {
+            'Software Architecture': {
+                mode: MODE.JTOB,
+                domainContext: 'Cloud-native Microservices Architecture',
+                sections: {
+                    "1.1": true, "1.2": true, "1.3": false, "1.4": true,
+                    "2.1": true, "2.2": true, "2.3": false, 
+                    "3.1": true, "3.2": true, "3.3": false,
+                    "4.1": true, "4.2": true, "4.3": false, "4.4": false,
+                    "5.1": true, "5.2": true, "5.3": false, "5.4": true
+                },
+                customInstructions: {
+                    "1.4": "Verify tool versions specifically against CI/CD pipeline compatibility."
+                }
+            },
+            'Scientific Claim Assessment': {
+                mode: MODE.JTOB_IC,
+                domainContext: 'Peer-reviewed Astrophysics Papers',
+                sections: Object.keys(SECTIONS).reduce((acc, k) => ({...acc, [k]: true}), {})
+            },
+            'Minimal Prototype': {
+                mode: MODE.JTOB,
+                domainContext: 'General Knowledge Graph',
+                sections: {
+                    "1.1": true, "1.2": true, "1.3": false, "1.4": false,
+                    "2.1": true, "2.2": true, "2.3": false,
+                    "3.1": false, "3.2": false, "3.3": false,
+                    "4.1": true, "4.2": true, "4.3": false, "4.4": false,
+                    "5.1": true, "5.2": true, "5.3": false, "5.4": false
+                }
+            }
+        };
+
+        // --- 3. COMPONENTS ---
+
+        const Icon = ({ name, size = 16, className = "" }) => {
+            React.useEffect(() => {
+                if (window.lucide) window.lucide.createIcons();
+            }, [name]);
+            return <i data-lucide={name} className={className} style={{ width: size, height: size, display: 'inline-block' }}></i>;
+        };
+
+        // Reusable API Key Input
+        const ApiKeyConfig = ({ value, onChange }) => {
+            const [isVisible, setIsVisible] = useState(false);
+            return (
+                <div className="bg-slate-800 p-3 rounded-lg mb-4 text-slate-200 shadow-inner">
+                    <div className="flex justify-between items-center mb-2">
+                        <div className="flex items-center gap-2">
+                             <span className="text-xs font-bold uppercase tracking-widest text-blue-400 flex items-center gap-1">
+                                <Icon name="sparkles" size={12} className="text-yellow-400" />
+                                Gemini API
+                             </span>
+                             <span className="text-[10px] text-slate-400">(Optional)</span>
+                        </div>
+                        <button onClick={() => setIsVisible(!isVisible)} className="text-slate-400 hover:text-white">
+                            <Icon name={isVisible ? "eye-off" : "eye"} size={14} />
+                        </button>
+                    </div>
+                    {isVisible ? (
+                        <input 
+                            type="password" 
+                            className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+                            placeholder="Paste API Key here (browser-only storage)"
+                            value={value}
+                            onChange={(e) => onChange(e.target.value)}
+                        />
+                    ) : (
+                        <div className="text-[10px] text-slate-400 italic">
+                            {value ? "Key loaded" : "Enter key to enable AI features"}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const SectionToggle = ({ id, def, state, onToggle, onCustomize, customText, isIC }) => {
+            const isDependentDisabled = !state.sections[id].enabled && state.mode === MODE.JTOB && def.mode === "IC_ONLY";
+            
+            return (
+                <div className={`border-l-2 pl-3 py-2 mb-2 transition-colors ${state.sections[id].enabled ? 'border-blue-500 bg-blue-50/50' : 'border-gray-200 opacity-70'}`}>
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                            <input 
+                                type="checkbox" 
+                                checked={state.sections[id].enabled} 
+                                onChange={() => onToggle(id)}
+                                disabled={state.mode === MODE.JTOB && def.mode === "IC_ONLY"}
+                                className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                            />
+                            <span className={`text-sm font-medium ${isIC ? 'text-purple-700' : 'text-gray-700'}`}>
+                                {def.title}
+                                {isIC && <span className="ml-2 text-[10px] bg-purple-100 text-purple-800 px-1 rounded border border-purple-200">IC</span>}
+                            </span>
+                        </div>
+                        <button onClick={() => onCustomize(id)} className="text-gray-400 hover:text-blue-500 relative group">
+                            <Icon name="edit-2" size={14} />
+                        </button>
+                    </div>
+                    
+                    {state.sections[id].enabled && customText && (
+                        <div className="mt-2 text-xs bg-yellow-50 border border-yellow-200 p-2 rounded text-yellow-800 flex items-start gap-2">
+                            <Icon name="sticky-note" size={12} className="mt-0.5" />
+                            <span className="italic line-clamp-2">{customText}</span>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [state, setState] = useState(() => {
+                const saved = localStorage.getItem('jtob_config');
+                return saved ? JSON.parse(saved) : INITIAL_STATE;
+            });
+
+            const [customizingId, setCustomizingId] = useState(null);
+            const [previewMd, setPreviewMd] = useState('');
+            const [showCopyToast, setShowCopyToast] = useState(false);
+            
+            // AI States
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [aiError, setAiError] = useState(null);
+
+            // Persistence
+            useEffect(() => {
+                localStorage.setItem('jtob_config', JSON.stringify(state));
+            }, [state]);
+
+            // Template Generation Logic
+            useEffect(() => {
+                generateTemplate();
+            }, [state]);
+
+            const generateTemplate = () => {
+                const date = new Date().toISOString().split('T')[0];
+                let md = `# ${state.mode === MODE.JTOB_IC ? 'JUST-IN-TIME ONTOLOGY BUILDER WITH IMPACT CONSIDERATIONS (JTOB-IC)' : 'JUST-IN-TIME ONTOLOGY BUILDER (JTOB)'}\n`;
+                md += `VERSION: 3.0\nDATE: ${date}\nTEMPLATE: ${state.configName}\n`;
+                if (state.domainContext) md += `DOMAIN: ${state.domainContext}\n`;
+                md += `\n`;
+
+                // Core Principles
+                if (state.globalSettings.includeCore) {
+                    md += `## CORE PRINCIPLES\n\n${SECTIONS.CORE.content}\n\n`;
+                }
+
+                if (state.globalSettings.includeWarnings) {
+                    md += `**Critical warnings:**\n${SECTIONS.WARNINGS.content}\n\n`;
+                }
+
+                md += `---\n\n`;
+
+                // Phases
+                const phases = [1, 2, 3, 4, 5];
+                const phaseNames = {1: "REQUIREMENTS", 2: "MINIMAL STRUCTURE", 3: "CONSTRAINTS", 4: "VALIDATION", 5: "HANDOFF"};
+
+                phases.forEach(phaseNum => {
+                    const phaseSections = Object.keys(SECTIONS).filter(k => SECTIONS[k].phase === phaseNum);
+                    const hasEnabled = phaseSections.some(k => state.sections[k]?.enabled);
+
+                    if (hasEnabled) {
+                        md += `## PHASE ${phaseNum}: ${phaseNames[phaseNum]}\n\n`;
+                        
+                        phaseSections.forEach(key => {
+                            if (state.sections[key]?.enabled) {
+                                const sec = SECTIONS[key];
+                                md += `### ${sec.title}\n\n`;
+                                
+                                if (state.customInstructions[key]) {
+                                    md += `> 💡 **Custom Instruction:** ${state.customInstructions[key]}\n\n`;
+                                }
+
+                                if (state.verbosity === 'minimal') {
+                                    const lines = sec.content.split('\n');
+                                    const minimalContent = lines.filter(l => l.startsWith('**') || l.startsWith('-')).slice(0, 5).join('\n');
+                                    md += minimalContent + `\n... (See standard template for detail)\n\n`;
+                                } else {
+                                    md += `${sec.content}\n\n`;
+                                }
+                            }
+                        });
+                        
+                        md += `---\n\n`;
+                    }
+                });
+
+                if (state.verbosity === 'detailed') {
+                    md += ANTI_PATTERNS + `\n\n---\n\n`;
+                }
+                
+                if (state.globalSettings.includeChecklist) {
+                    md += `## FINAL CHECKLIST\n- [ ] All queries answerable?\n- [ ] Deliverables generated?\n- [ ] Metrics calibrated?\n`;
+                }
+
+                md += `\n<!-- JTOB_CONFIG_START\n${JSON.stringify(state)}\nJTOB_CONFIG_END -->`;
+                setPreviewMd(md);
+            };
+
+            // --- GEMINI HANDLER ---
+            const handleAiSuggestion = async (sectionId) => {
+                if (!state.domainContext) {
+                    alert("Please enter a 'Domain / Context' in the main settings first.");
+                    return;
+                }
+
+                setIsGenerating(true);
+                setAiError(null);
+
+                try {
+                    const sectionTitle = SECTIONS[sectionId].title;
+                    const sectionContent = SECTIONS[sectionId].content;
+                    
+                    let prompt = "";
+                    
+                    // Special case for 1.1 - Generate the actual content structure
+                    if (sectionId === "1.1") {
+                        prompt = `You are an expert ontology engineer using the JTOB framework.
+                        The domain is: "${state.domainContext}".
+                        The user wants to customize the instructions for section "${sectionTitle}".
+                        
+                        Current section template:
+                        ${sectionContent}
+
+                        TASK: Draft specific custom instructions for the LLM that will use this template.
+                        Tell the LLM exactly what kind of "Primary Purpose", "Deliverables", and "Decisions" are relevant for a ${state.domainContext} ontology.
+                        Give concrete examples they should look for.
+                        Keep it concise (max 100 words).
+                        Return ONLY the instruction text.`;
+                    } else {
+                        // General case for other sections
+                        prompt = `You are an expert ontology engineer using the JTOB framework.
+                        The domain is: "${state.domainContext}".
+                        The user is configuring section: "${sectionTitle}".
+                        
+                        Suggest 1-2 concise, high-impact custom instructions that would help an LLM generate better content for this specific domain.
+                        Focus on what is unique about "${state.domainContext}" regarding this section.
+                        Return ONLY the instruction text.`;
+                    }
+
+                    const result = await GeminiService.generate(state.userApiKey, prompt);
+                    
+                    if (result) {
+                        setState(s => ({
+                            ...s,
+                            customInstructions: {
+                                ...s.customInstructions,
+                                [sectionId]: result.trim()
+                            }
+                        }));
+                    }
+                } catch (err) {
+                    console.error(err);
+                    setAiError("Failed to generate. Check API Key or try again.");
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            // Standard Handlers
+            const handlePresetLoad = (presetName) => {
+                if (!window.confirm("This will overwrite your current configuration. Continue?")) return;
+                const preset = PRESETS[presetName];
+                setState(prev => ({
+                    ...prev,
+                    mode: preset.mode,
+                    domainContext: preset.domainContext || prev.domainContext,
+                    sections: Object.keys(SECTIONS).reduce((acc, key) => {
+                        const isEnabled = preset.sections[key] !== undefined 
+                            ? preset.sections[key] 
+                            : (SECTIONS[key].mode === "ALL" || (SECTIONS[key].mode === "IC_ONLY" && preset.mode === MODE.JTOB_IC));
+                        acc[key] = { enabled: isEnabled };
+                        return acc;
+                    }, {}),
+                    customInstructions: preset.customInstructions || {}
+                }));
+            };
+
+            const toggleSection = (id) => {
+                setState(prev => {
+                    const newState = { ...prev };
+                    const currentEnabled = newState.sections[id].enabled;
+                    newState.sections[id].enabled = !currentEnabled;
+
+                    if (currentEnabled) { 
+                        const dependencies = DEPENDENCIES[id];
+                        if (dependencies) {
+                            dependencies.forEach(depId => {
+                                if (newState.sections[depId]) newState.sections[depId].enabled = false;
+                            });
+                        }
+                    } else {
+                        if (id === "2.3" && !newState.sections["1.3"].enabled) newState.sections["1.3"].enabled = true;
+                        if (id === "4.3" && !newState.sections["2.3"].enabled) newState.sections["2.3"].enabled = true;
+                    }
+                    return newState;
+                });
+            };
+
+            const handleModeChange = (newMode) => {
+                setState(prev => {
+                    const newState = { ...prev, mode: newMode };
+                    if (newMode === MODE.JTOB) {
+                        Object.keys(SECTIONS).forEach(key => {
+                            if (SECTIONS[key].mode === "IC_ONLY") {
+                                newState.sections[key].enabled = false;
+                            }
+                        });
+                    }
+                    return newState;
+                });
+            };
+
+            const exportFile = () => {
+                const blob = new Blob([previewMd], { type: 'text/markdown' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${state.configName.replace(/\s+/g, '_')}_${state.mode}.md`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            const importFile = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const text = e.target.result;
+                    const match = text.match(/<!-- JTOB_CONFIG_START\n([\s\S]*?)\nJTOB_CONFIG_END -->/);
+                    if (match && match[1]) {
+                        try {
+                            const config = JSON.parse(match[1]);
+                            setState(config);
+                            alert("Configuration loaded successfully!");
+                        } catch (err) {
+                            alert("Failed to parse configuration from file.");
+                        }
+                    } else {
+                        alert("No valid JTOB configuration found in this file.");
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const copyToClipboard = () => {
+                navigator.clipboard.writeText(previewMd).then(() => {
+                    setShowCopyToast(true);
+                    setTimeout(() => setShowCopyToast(false), 2000);
+                });
+            };
+
+            return (
+                <div className="flex h-full flex-col md:flex-row">
+                    
+                    {/* LEFT SIDEBAR: CONFIGURATION */}
+                    <div className="w-full md:w-1/2 lg:w-5/12 flex flex-col border-r border-slate-200 bg-white h-full overflow-hidden">
+                        
+                        {/* Header */}
+                        <div className="p-4 border-b border-slate-200 bg-slate-50">
+                            <div className="flex justify-between items-center mb-4">
+                                <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                    <Icon name="layout-template" className="text-blue-600" />
+                                    JTOB Builder
+                                </h1>
+                                <div className="flex gap-2">
+                                    <label className="cursor-pointer bg-white border border-slate-300 hover:bg-slate-50 text-slate-600 px-3 py-1.5 rounded text-sm flex items-center gap-2 shadow-sm transition-all">
+                                        <Icon name="upload" size={14} /> Load
+                                        <input type="file" className="hidden" accept=".md,.txt" onChange={importFile} />
+                                    </label>
+                                    <button onClick={() => {
+                                        const configStr = JSON.stringify(state);
+                                        const blob = new Blob([configStr], {type: 'application/json'});
+                                        const url = URL.createObjectURL(blob);
+                                        const a = document.createElement('a');
+                                        a.href = url; a.download = 'jtob_config.json';
+                                        a.click();
+                                    }} className="bg-white border border-slate-300 hover:bg-slate-50 text-slate-600 px-3 py-1.5 rounded text-sm flex items-center gap-2 shadow-sm transition-all">
+                                        <Icon name="save" size={14} /> Save
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Framework Toggle */}
+                            <div className="flex bg-slate-200 p-1 rounded-lg mb-4">
+                                <button 
+                                    className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-all ${state.mode === MODE.JTOB ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                    onClick={() => handleModeChange(MODE.JTOB)}
+                                >
+                                    Standard JTOB
+                                </button>
+                                <button 
+                                    className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-all ${state.mode === MODE.JTOB_IC ? 'bg-white text-purple-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                    onClick={() => handleModeChange(MODE.JTOB_IC)}
+                                >
+                                    JTOB-IC (Impact)
+                                </button>
+                            </div>
+
+                            {/* API Key Config */}
+                            <ApiKeyConfig 
+                                value={state.userApiKey} 
+                                onChange={(val) => setState(s => ({...s, userApiKey: val}))} 
+                            />
+
+                            {/* Settings Grid */}
+                            <div className="grid grid-cols-2 gap-3 mb-2">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Preset</label>
+                                    <select 
+                                        className="w-full text-sm border border-slate-300 rounded p-1.5 bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                        onChange={(e) => handlePresetLoad(e.target.value)}
+                                        defaultValue=""
+                                    >
+                                        <option value="" disabled>Select Preset...</option>
+                                        {Object.keys(PRESETS).map(p => <option key={p} value={p}>{p}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Verbosity</label>
+                                    <select 
+                                        className="w-full text-sm border border-slate-300 rounded p-1.5 bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                        value={state.verbosity}
+                                        onChange={(e) => setState(s => ({...s, verbosity: e.target.value}))}
+                                    >
+                                        <option value="minimal">Minimal (Headers)</option>
+                                        <option value="standard">Standard</option>
+                                        <option value="detailed">Detailed (+Patterns)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            {/* Domain Context Input */}
+                            <div className="mt-2">
+                                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">
+                                    Domain / Context <span className="text-blue-400 font-normal">(Required for AI)</span>
+                                </label>
+                                <input 
+                                    type="text"
+                                    className="w-full text-sm border border-slate-300 rounded p-1.5 bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                    placeholder="e.g. Supply Chain, RPG Magic System, Clinical Trials..."
+                                    value={state.domainContext}
+                                    onChange={(e) => setState(s => ({...s, domainContext: e.target.value}))}
+                                />
+                            </div>
+                        </div>
+
+                        {/* Scrollable Sections Area */}
+                        <div className="flex-1 overflow-y-auto p-4">
+                            {/* Global Toggles */}
+                            <div className="mb-6 bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
+                                <h3 className="text-xs font-bold text-slate-400 uppercase mb-2 tracking-wider">Global Elements</h3>
+                                <div className="space-y-2">
+                                    <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                        <input type="checkbox" checked={state.globalSettings.includeCore} onChange={() => setState(s => ({...s, globalSettings: {...s.globalSettings, includeCore: !s.globalSettings.includeCore}}))} className="rounded text-blue-600" />
+                                        Include Core Principles
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                                        <input type="checkbox" checked={state.globalSettings.includeWarnings} onChange={() => setState(s => ({...s, globalSettings: {...s.globalSettings, includeWarnings: !s.globalSettings.includeWarnings}}))} className="rounded text-blue-600" />
+                                        Include Critical Warnings
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Phase Accordions */}
+                            {[1, 2, 3, 4, 5].map(phase => (
+                                <div key={phase} className="mb-4">
+                                    <h3 className="text-xs font-bold text-blue-600 uppercase mb-2 tracking-wider bg-blue-50 p-1 rounded">
+                                        Phase {phase}
+                                        {phase === 1 && ": Requirements"}
+                                        {phase === 2 && ": Minimal Structure"}
+                                        {phase === 3 && ": Constraints"}
+                                        {phase === 4 && ": Validation"}
+                                        {phase === 5 && ": Handoff"}
+                                    </h3>
+                                    <div className="pl-2">
+                                        {Object.keys(SECTIONS)
+                                            .filter(k => SECTIONS[k].phase === phase)
+                                            .map(key => (
+                                                <SectionToggle 
+                                                    key={key} 
+                                                    id={key} 
+                                                    def={SECTIONS[key]} 
+                                                    state={state} 
+                                                    onToggle={toggleSection}
+                                                    onCustomize={setCustomizingId}
+                                                    customText={state.customInstructions[key]}
+                                                    isIC={SECTIONS[key].mode === "IC_ONLY"}
+                                                />
+                                            ))
+                                        }
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* RIGHT PANEL: PREVIEW */}
+                    <div className="w-full md:w-1/2 lg:w-7/12 flex flex-col h-full bg-white">
+                        {/* Preview Toolbar */}
+                        <div className="p-3 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-slate-500 uppercase">Export Filename:</span>
+                                <input 
+                                    type="text" 
+                                    value={state.configName}
+                                    onChange={(e) => setState(s => ({...s, configName: e.target.value}))}
+                                    className="text-sm border border-slate-300 rounded px-2 py-1 w-48"
+                                />
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={copyToClipboard} className="text-slate-600 hover:text-blue-600 px-3 py-1 text-sm rounded border border-slate-300 bg-white hover:bg-blue-50 transition-colors flex items-center gap-2">
+                                    <Icon name="copy" size={14} /> Copy
+                                </button>
+                                <button onClick={exportFile} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 text-sm rounded shadow-sm flex items-center gap-2 transition-colors">
+                                    <Icon name="download" size={14} /> Download MD
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Markdown Preview Area */}
+                        <div className="flex-1 overflow-y-auto p-8 bg-white relative">
+                             <div 
+                                className="markdown-preview max-w-3xl mx-auto"
+                                dangerouslySetInnerHTML={{ __html: marked.parse(previewMd) }}
+                             />
+                        </div>
+                    </div>
+
+                    {/* MODAL: CUSTOM INSTRUCTIONS */}
+                    {customizingId && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-200">
+                                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                                    <h3 className="font-bold text-lg text-slate-800">Customize {SECTIONS[customizingId].title}</h3>
+                                    <button onClick={() => setCustomizingId(null)} className="text-slate-400 hover:text-slate-600">
+                                        <Icon name="x" size={20} />
+                                    </button>
+                                </div>
+                                <div className="p-4">
+                                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                                        Add custom context or specific instructions for the LLM:
+                                    </label>
+                                    
+                                    <div className="relative">
+                                        <textarea 
+                                            className="w-full h-32 border border-slate-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none"
+                                            placeholder="e.g., 'Ensure validation rules strictly adhere to ISO 27001...'"
+                                            value={state.customInstructions[customizingId] || ''}
+                                            onChange={(e) => setState(s => ({
+                                                ...s, 
+                                                customInstructions: {
+                                                    ...s.customInstructions, 
+                                                    [customizingId]: e.target.value
+                                                }
+                                            }))}
+                                        ></textarea>
+                                        
+                                        {/* AI Button */}
+                                        <button 
+                                            onClick={() => handleAiSuggestion(customizingId)}
+                                            disabled={isGenerating || !state.domainContext}
+                                            className={`absolute bottom-2 right-2 text-xs flex items-center gap-1 px-2 py-1.5 rounded border shadow-sm transition-all
+                                                ${isGenerating 
+                                                    ? 'bg-slate-100 text-slate-400 cursor-wait' 
+                                                    : state.domainContext 
+                                                        ? 'bg-gradient-to-r from-yellow-50 to-orange-50 border-yellow-200 text-yellow-700 hover:shadow hover:border-yellow-300' 
+                                                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                                }`}
+                                            title={!state.domainContext ? "Enter Domain Context in settings to enable" : "Draft with Gemini"}
+                                        >
+                                            {isGenerating ? (
+                                                <>
+                                                    <Icon name="loader-2" size={12} className="animate-spin" />
+                                                    Thinking...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Icon name="sparkles" size={12} className={state.domainContext ? "text-yellow-500" : "text-slate-400"} />
+                                                    ✨ Suggest with Gemini
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+
+                                    {aiError && <div className="mt-2 text-xs text-red-500">{aiError}</div>}
+                                    
+                                    <div className="mt-2 text-xs text-slate-500 flex justify-between items-center">
+                                        <span>Injects a highlighted blockquote within the template.</span>
+                                        {!state.domainContext && <span className="text-red-400">⚠ Enter Domain Context to use AI</span>}
+                                    </div>
+                                </div>
+                                <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+                                    <button 
+                                        onClick={() => setState(s => {
+                                            const newCustom = {...s.customInstructions};
+                                            delete newCustom[customizingId];
+                                            return {...s, customInstructions: newCustom};
+                                        })}
+                                        className="px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded"
+                                    >
+                                        Clear
+                                    </button>
+                                    <button 
+                                        onClick={() => setCustomizingId(null)}
+                                        className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded font-medium shadow-sm"
+                                    >
+                                        Done
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* TOAST */}
+                    {showCopyToast && (
+                        <div className="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-2 rounded shadow-lg text-sm flex items-center gap-2 animate-bounce">
+                            <Icon name="check" size={16} /> Copied to clipboard
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
